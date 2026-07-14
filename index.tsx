@@ -35,6 +35,9 @@ export class GdmLiveAudio extends LitElement {
     userText: string;
     agentText: string;
   }> = [];
+  @state() userLocation: { latitude: number; longitude: number; accuracy: number; timestamp: number } | null = null;
+  @state() locationError: string | null = null;
+  @state() isLocating = false;
 
   private activeMessageId: string | null = null;
   private activeRecognition: any = null;
@@ -67,6 +70,7 @@ export class GdmLiveAudio extends LitElement {
   connectedCallback() {
     super.connectedCallback();
     this.loadVoiceInteractions();
+    this.loadUserLocation();
     this.runBootSequence();
   }
 
@@ -139,7 +143,7 @@ export class GdmLiveAudio extends LitElement {
           inputAudioTranscription: {},
           outputAudioTranscription: {},
           systemInstruction: {
-            parts: [{ text: "You are Aegis, a highly advanced, real-time voice-and-text chatbot. Respond conversationally, concisely, and clearly. Keep responses naturally paced, engaging, and friendly." }]
+            parts: [{ text: `You are Aegis, a highly advanced, real-time voice-and-text chatbot. Respond conversationally, concisely, and clearly. Keep responses naturally paced, engaging, and friendly.${this.userLocation ? ` The user's current real-time GPS location is Latitude: ${this.userLocation.latitude}, Longitude: ${this.userLocation.longitude} (accuracy ~${this.userLocation.accuracy}m). Feel free to refer to this if they ask about weather, location, recommendations, or coordinates.` : ''}` }]
           }
         },
         callbacks: {
@@ -712,6 +716,112 @@ export class GdmLiveAudio extends LitElement {
     this.playSoundEffect('click');
   }
 
+  private loadUserLocation() {
+    try {
+      const stored = localStorage.getItem('aegis_user_location');
+      if (stored) {
+        this.userLocation = JSON.parse(stored);
+        this.addDiagnosticLog('Loaded cached GPS telemetry from local cache.', null, 'success');
+      }
+    } catch (e) {
+      console.error('Failed to load user location from localStorage:', e);
+    }
+  }
+
+  private saveUserLocation() {
+    try {
+      if (this.userLocation) {
+        localStorage.setItem('aegis_user_location', JSON.stringify(this.userLocation));
+      } else {
+        localStorage.removeItem('aegis_user_location');
+      }
+    } catch (e) {
+      console.error('Failed to save user location to localStorage:', e);
+    }
+  }
+
+  private requestUserLocation() {
+    if (!navigator.geolocation) {
+      this.locationError = 'Geolocation not supported by browser';
+      this.addDiagnosticLog('Geolocation is not supported by this browser.', null, 'error');
+      this.playSoundEffect('warning');
+      return;
+    }
+
+    this.isLocating = true;
+    this.locationError = null;
+    this.addDiagnosticLog('Acquiring real-time GPS telemetry from browser sensor...', null, 'info');
+    this.playSoundEffect('click');
+
+    navigator.geolocation.getCurrentPosition(
+      (position) => {
+        const { latitude, longitude, accuracy } = position.coords;
+        this.userLocation = {
+          latitude: parseFloat(latitude.toFixed(5)),
+          longitude: parseFloat(longitude.toFixed(5)),
+          accuracy: Math.round(accuracy),
+          timestamp: Date.now()
+        };
+        this.isLocating = false;
+        this.saveUserLocation();
+        this.addDiagnosticLog(`GPS Telemetry Lock: Lat ${this.userLocation.latitude}, Lon ${this.userLocation.longitude} (accuracy: ~${this.userLocation.accuracy}m)`, null, 'success');
+        this.playSoundEffect('success');
+
+        // If a session is currently active, transmit a real-time state payload to Aegis!
+        if (this.session) {
+          try {
+            this.addDiagnosticLog('Synchronizing active GPS telemetry payload to Aegis live session...', null, 'info');
+            this.session.sendClientContent({
+              turns: [{
+                role: 'user',
+                parts: [{
+                  text: `[SYSTEM: User has successfully verified and synchronized their real-time coordinates. Latitude: ${this.userLocation.latitude}, Longitude: ${this.userLocation.longitude}, Accuracy: ~${this.userLocation.accuracy} meters. Please acknowledge this update and feel free to use it if they ask for recommendations or location-based info.]`
+                }]
+              }],
+              turnComplete: true
+            });
+          } catch (err: any) {
+            console.error('Failed to push live GPS to session:', err);
+          }
+        }
+        this.requestUpdate();
+      },
+      (error) => {
+        this.isLocating = false;
+        let errMsg = 'Failed to acquire location';
+        switch (error.code) {
+          case error.PERMISSION_DENIED:
+            errMsg = 'Location permission denied by user';
+            break;
+          case error.POSITION_UNAVAILABLE:
+            errMsg = 'Position information is unavailable';
+            break;
+          case error.TIMEOUT:
+            errMsg = 'Location request timed out';
+            break;
+        }
+        this.locationError = errMsg;
+        this.addDiagnosticLog(`GPS Telemetry Error: ${errMsg}`, null, 'error');
+        this.playSoundEffect('warning');
+        this.requestUpdate();
+      },
+      {
+        enableHighAccuracy: true,
+        timeout: 10000,
+        maximumAge: 0
+      }
+    );
+  }
+
+  private clearUserLocation() {
+    this.userLocation = null;
+    this.locationError = null;
+    this.saveUserLocation();
+    this.addDiagnosticLog('GPS location cached data has been purged.', null, 'warning');
+    this.playSoundEffect('warning');
+    this.requestUpdate();
+  }
+
   private handleTypedCommandSubmit(e: Event) {
     e.preventDefault();
     if (!this.typedCommand.trim()) return;
@@ -830,6 +940,59 @@ export class GdmLiveAudio extends LitElement {
               <span class="${this.aegisState !== 'STANDBY' ? 'text-blue-400' : 'text-zinc-500'} font-bold">${this.aegisState}</span>
             </div>
             
+            <!-- GPS Location Sensor Block -->
+            <div class="flex items-center gap-1 pointer-events-auto">
+              <button 
+                @click=${this.requestUserLocation}
+                ?disabled=${this.isLocating}
+                class="px-3 py-1.5 rounded border transition-all duration-300 cursor-pointer flex items-center gap-1.5 text-[10px] tracking-widest uppercase ${
+                  this.isLocating
+                    ? 'border-amber-500/40 bg-amber-950/10 text-amber-400 animate-pulse'
+                    : this.userLocation
+                      ? 'border-emerald-500/40 bg-emerald-950/10 text-emerald-400 hover:border-emerald-500 hover:bg-emerald-950/30 shadow-[0_0_10px_rgba(16,185,129,0.15)]'
+                      : this.locationError
+                        ? 'border-red-500/40 bg-red-950/10 text-red-400 hover:border-red-500 hover:bg-red-950/30'
+                        : 'border-blue-500/20 hover:border-blue-500 bg-blue-950/10 hover:bg-blue-950/30 text-blue-400'
+                }"
+                title="${this.userLocation ? `GPS Lock: ${this.userLocation.latitude}, ${this.userLocation.longitude}. Click to re-calibrate GPS.` : 'Click to acquire real-time user GPS location coordinates'}">
+                
+                ${this.isLocating ? html`
+                  <svg class="animate-spin h-3 w-3 text-amber-400" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
+                    <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
+                    <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+                  </svg>
+                  <span>Locking GPS...</span>
+                ` : this.userLocation ? html`
+                  <span class="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-ping"></span>
+                  <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor" class="w-3.5 h-3.5 text-emerald-400">
+                    <path stroke-linecap="round" stroke-linejoin="round" d="M15 10.5a3 3 0 1 1-6 0 3 3 0 0 1 6 0Z" />
+                    <path stroke-linecap="round" stroke-linejoin="round" d="M19.5 10.5c0 7.142-7.5 11.25-7.5 11.25S4.5 17.642 4.5 10.5a7.5 7.5 0 1 1 15 0Z" />
+                  </svg>
+                  <span>GPS: ${this.userLocation.latitude}, ${this.userLocation.longitude}</span>
+                ` : this.locationError ? html`
+                  <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor" class="w-3.5 h-3.5 text-red-400">
+                    <path stroke-linecap="round" stroke-linejoin="round" d="M12 9v3.75m9-.75a9 9 0 1 1-18 0 9 9 0 0 1 18 0Zm-9 3.75h.008v.008H12v-.008Z" />
+                  </svg>
+                  <span>GPS Error</span>
+                ` : html`
+                  <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor" class="w-3.5 h-3.5 text-blue-400">
+                    <path stroke-linecap="round" stroke-linejoin="round" d="M15 10.5a3 3 0 1 1-6 0 3 3 0 0 1 6 0Z" />
+                    <path stroke-linecap="round" stroke-linejoin="round" d="M19.5 10.5c0 7.142-7.5 11.25-7.5 11.25S4.5 17.642 4.5 10.5a7.5 7.5 0 1 1 15 0Z" />
+                  </svg>
+                  <span>Sync GPS</span>
+                `}
+              </button>
+              
+              ${this.userLocation ? html`
+                <button 
+                  @click=${this.clearUserLocation}
+                  class="px-2 py-1.5 rounded border border-zinc-800 hover:border-red-500/40 bg-zinc-950/80 hover:bg-red-950/10 text-zinc-500 hover:text-red-400 text-[10px] transition-all duration-300 cursor-pointer"
+                  title="Purge GPS Telemetry Memory Cache">
+                  ✕
+                </button>
+              ` : ''}
+            </div>
+
             <button 
               @click=${this.toggleHistoryPanel}
               class="px-3 py-1.5 rounded border border-blue-500/20 hover:border-blue-500 bg-blue-950/10 hover:bg-blue-950/30 text-blue-400 text-[10px] tracking-widest uppercase transition-all duration-300 cursor-pointer pointer-events-auto flex items-center gap-1.5">
