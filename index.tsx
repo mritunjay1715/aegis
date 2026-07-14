@@ -9,6 +9,19 @@ import {LitElement, css, html} from 'lit';
 import {customElement, state} from 'lit/decorators.js';
 import {createBlob, decode, decodeAudioData} from './utils';
 import './visual-3d';
+import {
+  auth,
+  db,
+  googleProvider,
+  signInWithPopup,
+  signInAnonymously,
+  signOut,
+  onAuthStateChanged,
+  doc,
+  getDoc,
+  setDoc,
+  updateDoc
+} from './firebase';
 
 export interface AegisPermission {
   id: string;
@@ -21,6 +34,12 @@ export interface AegisPermission {
 
 @customElement('gdm-live-audio')
 export class GdmLiveAudio extends LitElement {
+  // Authentication states
+  @state() currentUser: any = null;
+  @state() isAuthLoading = true;
+  @state() authErrorString: string | null = null;
+  private unsubscribeAuth: any = null;
+
   // Original audio states
   @state() isRecording = false;
   @state() status = '';
@@ -130,6 +149,7 @@ export class GdmLiveAudio extends LitElement {
 
   connectedCallback() {
     super.connectedCallback();
+    this.initFirebaseAuth();
     this.loadPermissions();
     this.loadVoiceInteractions();
     this.loadUserLocation();
@@ -139,6 +159,138 @@ export class GdmLiveAudio extends LitElement {
   disconnectedCallback() {
     super.disconnectedCallback();
     if (this.timerInterval) clearInterval(this.timerInterval);
+    if (this.unsubscribeAuth) this.unsubscribeAuth();
+  }
+
+  private initFirebaseAuth() {
+    this.isAuthLoading = true;
+    this.unsubscribeAuth = onAuthStateChanged(auth, async (user) => {
+      this.currentUser = user;
+      this.isAuthLoading = false;
+      if (user) {
+        this.addDiagnosticLog(`Authorized secure connection: ${user.email}`, null, 'success');
+        this.playSoundEffect('success');
+        await this.loadUserDataFromFirestore(user.uid);
+      } else {
+        this.addDiagnosticLog('Secure connection terminated. Awaiting authentication.', null, 'warning');
+      }
+      this.requestUpdate();
+    });
+  }
+
+  private async loadUserDataFromFirestore(uid: string) {
+    try {
+      this.addDiagnosticLog('Establishing real-time Firestore synchronization stream...', null, 'info');
+      const userDocRef = doc(db, 'users', uid);
+      const userSnap = await getDoc(userDocRef);
+      if (userSnap.exists()) {
+        const data = userSnap.data();
+        if (data.permissions) {
+          this.permissions = data.permissions;
+          this.addDiagnosticLog('Synchronized user security policies from Firestore secure vault.', null, 'success');
+        }
+        if (data.voiceInteractions) {
+          this.voiceInteractions = data.voiceInteractions;
+          this.addDiagnosticLog('Restored voice interaction telemetry history.', null, 'success');
+        }
+        if (data.chatHistory) {
+          this.chatHistory = data.chatHistory;
+        }
+        if (data.userLocation) {
+          this.userLocation = data.userLocation;
+        }
+      } else {
+        this.addDiagnosticLog('No existing policy found on Firestore. Provisioning fresh shield profiles...', null, 'warning');
+        await this.saveUserDataToFirestore();
+      }
+    } catch (e: any) {
+      console.error('Firestore load error:', e);
+      this.addDiagnosticLog(`Cloud sync warning: ${e.message}. Using offline policies.`, null, 'warning');
+    }
+  }
+
+  private async saveUserDataToFirestore() {
+    if (!this.currentUser) return;
+    try {
+      const uid = this.currentUser.uid;
+      const userDocRef = doc(db, 'users', uid);
+      await setDoc(userDocRef, {
+        permissions: this.permissions,
+        voiceInteractions: this.voiceInteractions,
+        chatHistory: this.chatHistory,
+        userLocation: this.userLocation,
+        email: this.currentUser.email,
+        updatedAt: Date.now()
+      }, { merge: true });
+      this.addDiagnosticLog('Shield telemetry state securely replicated to Firestore cloud cluster.', null, 'success');
+    } catch (e: any) {
+      console.error('Firestore save error:', e);
+      this.addDiagnosticLog(`Cloud replication error: ${e.message}`, null, 'error');
+    }
+  }
+
+  private async handleGoogleSignIn() {
+    this.isAuthLoading = true;
+    this.authErrorString = null;
+    this.addDiagnosticLog('Initiating secure OAuth Google Handshake...', null, 'info');
+    this.playSoundEffect('click');
+    try {
+      const result = await signInWithPopup(auth, googleProvider);
+      this.currentUser = result.user;
+      this.addDiagnosticLog(`Google Handshake Success: Welcome ${this.currentUser.displayName || this.currentUser.email}`, null, 'success');
+      this.playSoundEffect('success');
+      await this.loadUserDataFromFirestore(this.currentUser.uid);
+    } catch (error: any) {
+      console.error('Google sign-in error:', error);
+      let errorMsg = error.message || 'Authorization failed';
+      if (error.code === 'auth/popup-blocked') {
+        errorMsg = 'OAuth Pop-up blocked! Please click "Open in a new tab" at top-right, or allow pop-ups.';
+      }
+      this.authErrorString = errorMsg;
+      this.addDiagnosticLog(`OAuth Handshake Fail: ${errorMsg}`, null, 'error');
+      this.playSoundEffect('warning');
+    } finally {
+      this.isAuthLoading = false;
+      this.requestUpdate();
+    }
+  }
+
+  private async handleLogout() {
+    this.addDiagnosticLog('Terminating user session and deleting secure local keys...', null, 'warning');
+    this.playSoundEffect('click');
+    try {
+      await signOut(auth);
+      this.currentUser = null;
+      this.addDiagnosticLog('Secure session terminated successfully.', null, 'success');
+      this.playSoundEffect('success');
+    } catch (error: any) {
+      console.error('Logout error:', error);
+      this.addDiagnosticLog(`Logout error: ${error.message}`, null, 'error');
+    } finally {
+      this.requestUpdate();
+    }
+  }
+
+  private async handleDemoSignIn() {
+    this.isAuthLoading = true;
+    this.authErrorString = null;
+    this.addDiagnosticLog('Bypassing standard popup limits: Handshaking secure Demo Connection...', null, 'info');
+    this.playSoundEffect('click');
+    try {
+      const result = await signInAnonymously(auth);
+      this.currentUser = result.user;
+      this.addDiagnosticLog('Authenticated via local cryptographic shield profile.', null, 'success');
+      this.playSoundEffect('success');
+      await this.loadUserDataFromFirestore(this.currentUser.uid);
+    } catch (error: any) {
+      console.error('Demo sign-in error:', error);
+      this.authErrorString = error.message || 'Demo activation failed';
+      this.addDiagnosticLog(`Demo Activation Fail: ${error.message}`, null, 'error');
+      this.playSoundEffect('warning');
+    } finally {
+      this.isAuthLoading = false;
+      this.requestUpdate();
+    }
   }
 
   private runBootSequence() {
@@ -339,6 +491,7 @@ INSTRUCTIONS ON SECURITY BOUNDARIES:
             if (turnComplete) {
               this.activeMessageId = null;
               this.currentAgentResponse = '';
+              this.saveUserDataToFirestore();
             }
 
             // 5. Interruption Handling
@@ -755,6 +908,7 @@ INSTRUCTIONS ON SECURITY BOUNDARIES:
   private saveVoiceInteractions() {
     try {
       localStorage.setItem('aegis_voice_history', JSON.stringify(this.voiceInteractions));
+      this.saveUserDataToFirestore();
     } catch (e) {
       console.error('Failed to save voice interactions to localStorage:', e);
     }
@@ -802,6 +956,7 @@ INSTRUCTIONS ON SECURITY BOUNDARIES:
   private savePermissions() {
     try {
       localStorage.setItem('aegis_permissions', JSON.stringify(this.permissions));
+      this.saveUserDataToFirestore();
     } catch (e) {
       console.error('Failed to save permissions to localStorage:', e);
     }
@@ -903,6 +1058,7 @@ INSTRUCTIONS ON SECURITY BOUNDARIES:
       } else {
         localStorage.removeItem('aegis_user_location');
       }
+      this.saveUserDataToFirestore();
     } catch (e) {
       console.error('Failed to save user location to localStorage:', e);
     }
@@ -1055,8 +1211,84 @@ INSTRUCTIONS ON SECURITY BOUNDARIES:
           <div class="absolute inset-0 opacity-5 pointer-events-none bg-[linear-gradient(rgba(18,16,16,0)_50%,_rgba(0,0,0,0.25)_50%),_linear-gradient(90deg,_rgba(255,0,0,0.06),_rgba(0,255,0,0.02),_rgba(0,0,255,0.06))] bg-[size:100%_4px,_6px_100%]"></div>
         </div>
 
-        <!-- 1. BOOT DIALOG SCREEN -->
-        ${!this.isBooted ? html`
+        <!-- AUTHENTICATION CHECK LAYER -->
+        ${this.isAuthLoading ? html`
+          <div class="absolute inset-0 z-50 flex flex-col items-center justify-center bg-black/95 text-blue-400 font-mono p-8 animate-fade-in">
+            <div class="w-full max-w-sm p-6 rounded-xl border border-blue-500/25 bg-zinc-950/80 shadow-[0_0_35px_rgba(59,130,246,0.15)] text-center relative overflow-hidden">
+              <div class="absolute inset-x-0 h-1 bg-blue-500/20 top-0 pointer-events-none" style="animation: scanline 2s linear infinite;"></div>
+              
+              <div class="flex justify-center mb-6">
+                <div class="w-10 h-10 rounded-full border-2 border-t-blue-500 border-zinc-800 animate-spin"></div>
+              </div>
+              
+              <h2 class="text-sm font-bold tracking-widest text-zinc-300 uppercase mb-2">Decrypting Synapse Link...</h2>
+              <p class="text-[10px] text-zinc-500">Querying security credential authority cluster...</p>
+            </div>
+          </div>
+        ` : !this.currentUser ? html`
+          <div class="absolute inset-0 z-50 flex flex-col items-center justify-center bg-black/90 text-blue-400 font-mono p-4 sm:p-8 animate-fade-in">
+            <div class="w-full max-w-md p-6 sm:p-8 rounded-2xl border border-blue-500/30 bg-zinc-950/90 shadow-[0_0_50px_rgba(59,130,246,0.2)] relative overflow-hidden">
+              <div class="absolute inset-x-0 h-1 bg-blue-500/30 top-0 pointer-events-none" style="animation: scanline 4s linear infinite;"></div>
+              
+              <div class="flex items-center gap-3 mb-6">
+                <div class="w-3 h-3 rounded-full bg-blue-500 animate-ping"></div>
+                <div class="text-[9px] uppercase tracking-widest text-blue-400 font-bold border border-blue-500/25 px-2 py-0.5 rounded">AUTHENTICATION GATEWAY</div>
+              </div>
+              
+              <h1 class="text-3xl font-extrabold tracking-wider mb-2 text-white bg-gradient-to-r from-white to-zinc-400 bg-clip-text text-transparent">Aegis AI Chatbot</h1>
+              <p class="text-xs text-zinc-400 mb-6 leading-relaxed">
+                Unlock the Aegis tactical security suite, 3D live synaptic visuals, and local device control matrix. Sign in to load persistent cloud boundaries.
+              </p>
+
+              ${this.authErrorString ? html`
+                <div class="mb-5 p-3 rounded-lg border border-red-500/30 bg-red-950/20 text-[10px] text-red-400 leading-normal flex items-start gap-2">
+                  <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor" class="w-4 h-4 shrink-0 mt-0.5">
+                    <path stroke-linecap="round" stroke-linejoin="round" d="M12 9v3.75m9-.75a9 9 0 1 1-18 0 9 9 0 0 1 18 0Zm-9 3.75h.008v.008H12v-.008Z" />
+                  </svg>
+                  <div>
+                    <span class="font-bold uppercase block mb-0.5">Authorization Error</span>
+                    ${this.authErrorString}
+                  </div>
+                </div>
+              ` : ''}
+
+              <div class="space-y-3.5">
+                <!-- Standard Google OAuth Button -->
+                <button 
+                  id="google-signin-btn"
+                  @click=${this.handleGoogleSignIn}
+                  class="w-full flex items-center justify-center gap-3 py-3 px-4 rounded-xl border border-blue-500/30 hover:border-blue-500 bg-blue-950/20 hover:bg-blue-900/30 text-white font-semibold text-xs tracking-wider uppercase transition-all duration-300 cursor-pointer shadow-[0_0_15px_rgba(59,130,246,0.1)] active:scale-[0.98]">
+                  <!-- Google G Logo -->
+                  <svg class="h-4 w-4 shrink-0" viewBox="0 0 24 24" fill="currentColor">
+                    <path d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92c-.26 1.37-1.04 2.53-2.21 3.31v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.09z" fill="#4285F4" />
+                    <path d="M12 23c2.97 0 5.46-.98 7.28-2.66l-3.57-2.77c-.98.66-2.23 1.06-3.71 1.06-2.86 0-5.29-1.93-6.16-4.53H2.18v2.84C3.99 20.53 7.7 23 12 23z" fill="#34A853" />
+                    <path d="M5.84 14.09c-.22-.66-.35-1.36-.35-2.09s.13-1.43.35-2.09V7.06H2.18C1.43 8.55 1 10.22 1 12s.43 3.45 1.18 4.94l2.85-2.22.81-.63z" fill="#FBBC05" />
+                    <path d="M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1 7.7 1 3.99 3.47 2.18 7.06l3.66 2.84c.87-2.6 3.3-4.52 6.16-4.52z" fill="#EA4335" />
+                  </svg>
+                  Sign in with Google OAuth
+                </button>
+
+                <!-- Demo Fallback Sign In for Iframe Previews -->
+                <button 
+                  id="demo-signin-btn"
+                  @click=${this.handleDemoSignIn}
+                  class="w-full flex items-center justify-center gap-2.5 py-3 px-4 rounded-xl border border-zinc-800 hover:border-zinc-700 bg-zinc-950/80 hover:bg-zinc-900/60 text-zinc-400 hover:text-zinc-300 text-xs tracking-wider transition-all duration-300 cursor-pointer active:scale-[0.98]">
+                  <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor" class="w-4 h-4 text-zinc-500">
+                    <path stroke-linecap="round" stroke-linejoin="round" d="M16.5 10.5V6.75a4.5 4.5 0 1 0-9 0v3.75m-.75 11.25h10.5a2.25 2.25 0 0 0 2.25-2.25v-6.75a2.25 2.25 0 0 0-2.25-2.25H6.75a2.25 2.25 0 0 0-2.25 2.25v6.75a2.25 2.25 0 0 0 2.25 2.25Z" />
+                  </svg>
+                  Bypass popup limits (Sandbox Quick Start)
+                </button>
+              </div>
+
+              <div class="mt-8 pt-4 border-t border-zinc-900 flex justify-between items-center text-[9px] text-zinc-600">
+                <span>SECURE CRYPTO LINK ENCRYPTED</span>
+                <span>v2.5.0-PRO</span>
+              </div>
+            </div>
+          </div>
+        ` : html`
+          <!-- 1. BOOT DIALOG SCREEN -->
+          ${!this.isBooted ? html`
           <div class="absolute inset-0 z-50 flex flex-col items-center justify-center bg-black/95 text-blue-400 font-mono p-8">
             <div class="w-full max-w-md p-6 rounded-xl border border-blue-500/25 bg-zinc-950/80 shadow-[0_0_30px_rgba(59,130,246,0.1)] relative overflow-hidden">
               <div class="absolute inset-x-0 h-1 bg-blue-500/20 top-0 pointer-events-none" style="animation: scanline 3s linear infinite;"></div>
@@ -1185,6 +1417,22 @@ INSTRUCTIONS ON SECURITY BOUNDARIES:
               class="px-3 py-1.5 rounded border border-red-500/20 hover:border-red-500 bg-red-950/10 hover:bg-red-950/30 text-red-400 text-[10px] tracking-widest uppercase transition-all duration-300 cursor-pointer pointer-events-auto">
               Reset Session
             </button>
+
+            <!-- User Auth Profile & Logout -->
+            <div class="flex items-center gap-2.5 pl-2.5 border-l border-white/10 pointer-events-auto">
+              <div class="text-right hidden sm:block">
+                <div class="text-[9px] text-zinc-300 font-mono font-bold uppercase truncate max-w-[120px]" title="${this.currentUser?.email}">
+                  ${this.currentUser?.displayName || (this.currentUser?.email ? this.currentUser.email.split('@')[0] : 'Operator')}
+                </div>
+                <div class="text-[8px] text-emerald-500 font-mono uppercase tracking-widest">Secure Link</div>
+              </div>
+              <button 
+                @click=${this.handleLogout}
+                class="px-3 py-1.5 rounded border border-red-500/30 hover:border-red-500 bg-red-950/20 hover:bg-red-950/40 text-red-400 text-[10px] tracking-widest uppercase font-mono transition-all duration-300 cursor-pointer"
+                title="Disconnect from Aegis network">
+                Logout
+              </button>
+            </div>
           </div>
         </header>
 
@@ -1620,6 +1868,7 @@ INSTRUCTIONS ON SECURITY BOUNDARIES:
           </div>
         </div>
 
+        `}
       </div>
     `;
   }
