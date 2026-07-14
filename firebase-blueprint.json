@@ -1,0 +1,42 @@
+{
+  "entities": {
+    "User": {
+      "title": "User Profile",
+      "description": "User specific security permissions, chat logs, voice interaction packets, and current GPS telemetry",
+      "type": "object",
+      "properties": {
+        "permissions": {
+          "type": "array",
+          "description": "List of Aegis device and integration access privileges"
+        },
+        "voiceInteractions": {
+          "type": "array",
+          "description": "Telemetric trace of standard vocal packet triggers and responses"
+        },
+        "chatHistory": {
+          "type": "array",
+          "description": "Historical linear dialogue logs in text layout form"
+        },
+        "userLocation": {
+          "type": "object",
+          "description": "Secure GPS location telemetry container"
+        },
+        "email": {
+          "type": "string",
+          "description": "User email address if authenticated via OAuth"
+        },
+        "updatedAt": {
+          "type": "number",
+          "description": "System-replicated telemetry update timestamp"
+        }
+      },
+      "required": ["updatedAt"]
+    }
+  },
+  "firestore": {
+    "users/{userId}": {
+      "schema": "User",
+      "description": "Collection storing localized user policies, preferences, and session data"
+    }
+  }
+}

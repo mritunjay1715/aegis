@@ -20,7 +20,9 @@ import {
   doc,
   getDoc,
   setDoc,
-  updateDoc
+  updateDoc,
+  handleFirestoreError,
+  OperationType
 } from './firebase';
 
 export interface AegisPermission {
@@ -179,10 +181,17 @@ export class GdmLiveAudio extends LitElement {
   }
 
   private async loadUserDataFromFirestore(uid: string) {
+    const docPath = `users/${uid}`;
     try {
       this.addDiagnosticLog('Establishing real-time Firestore synchronization stream...', null, 'info');
       const userDocRef = doc(db, 'users', uid);
-      const userSnap = await getDoc(userDocRef);
+      let userSnap;
+      try {
+        userSnap = await getDoc(userDocRef);
+      } catch (error) {
+        handleFirestoreError(error, OperationType.GET, docPath);
+        return;
+      }
       if (userSnap.exists()) {
         const data = userSnap.data();
         if (data.permissions) {
@@ -211,17 +220,22 @@ export class GdmLiveAudio extends LitElement {
 
   private async saveUserDataToFirestore() {
     if (!this.currentUser) return;
+    const uid = this.currentUser.uid;
+    const docPath = `users/${uid}`;
     try {
-      const uid = this.currentUser.uid;
       const userDocRef = doc(db, 'users', uid);
-      await setDoc(userDocRef, {
-        permissions: this.permissions,
-        voiceInteractions: this.voiceInteractions,
-        chatHistory: this.chatHistory,
-        userLocation: this.userLocation,
-        email: this.currentUser.email,
-        updatedAt: Date.now()
-      }, { merge: true });
+      try {
+        await setDoc(userDocRef, {
+          permissions: this.permissions,
+          voiceInteractions: this.voiceInteractions,
+          chatHistory: this.chatHistory,
+          userLocation: this.userLocation,
+          email: this.currentUser.email || null,
+          updatedAt: Date.now()
+        }, { merge: true });
+      } catch (error) {
+        handleFirestoreError(error, OperationType.WRITE, docPath);
+      }
       this.addDiagnosticLog('Shield telemetry state securely replicated to Firestore cloud cluster.', null, 'success');
     } catch (e: any) {
       console.error('Firestore save error:', e);
