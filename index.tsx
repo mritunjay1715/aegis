@@ -10,6 +10,15 @@ import {customElement, state} from 'lit/decorators.js';
 import {createBlob, decode, decodeAudioData} from './utils';
 import './visual-3d';
 
+export interface AegisPermission {
+  id: string;
+  category: 'hardware' | 'calendar';
+  name: string;
+  description: string;
+  status: 'approved' | 'revoked';
+  lastAccessed: string;
+}
+
 @customElement('gdm-live-audio')
 export class GdmLiveAudio extends LitElement {
   // Original audio states
@@ -20,6 +29,58 @@ export class GdmLiveAudio extends LitElement {
   // Futuristic Chatbot States
   @state() bootProgress = 0;
   @state() isBooted = false;
+  @state() isPermissionsOpen = false;
+  @state() activePermissionCategory: 'all' | 'hardware' | 'calendar' = 'all';
+  @state() permissions: AegisPermission[] = [
+    {
+      id: 'smart_lights',
+      category: 'hardware',
+      name: 'Smart Ambiance Lights',
+      description: 'Allow Aegis to control brightness levels, hues, smart dimmers, and query fixture telemetry.',
+      status: 'approved',
+      lastAccessed: 'Never'
+    },
+    {
+      id: 'thermostat',
+      category: 'hardware',
+      name: 'Smart Thermostat',
+      description: 'Permit Aegis to regulate target HVAC temperatures and monitor home thermal telemetry.',
+      status: 'approved',
+      lastAccessed: 'Never'
+    },
+    {
+      id: 'smart_lock',
+      category: 'hardware',
+      name: 'Smart Secure Lock',
+      description: 'Enable Aegis to actuate physical locks, verify gate states, and issue digital secure keys.',
+      status: 'revoked',
+      lastAccessed: 'Never'
+    },
+    {
+      id: 'security_camera',
+      category: 'hardware',
+      name: 'CCTV Live Video Feed',
+      description: 'Provide live frame stream analysis, visual classification, and perimeter motion alarms.',
+      status: 'revoked',
+      lastAccessed: 'Never'
+    },
+    {
+      id: 'calendar_personal',
+      category: 'calendar',
+      name: 'Personal Google Calendar',
+      description: 'Sync personal Google Calendar timelines, read schedules, and insert new time blocks.',
+      status: 'approved',
+      lastAccessed: 'Never'
+    },
+    {
+      id: 'calendar_work',
+      category: 'calendar',
+      name: 'Work Google Calendar',
+      description: 'Access Workspace calendar free-busy states, create team invites, and inspect availability.',
+      status: 'revoked',
+      lastAccessed: 'Never'
+    }
+  ];
   @state() diagnosticLogs: Array<{ id: string; timestamp: string; message: string; details?: any; type: string }> = [];
   @state() chatHistory: Array<{ role: 'user' | 'model'; text: string; id: string; timestamp: string }> = [
     { role: 'model', text: 'Aegis AI Chatbot online. Speak or type a command to communicate with the neural interface.', id: 'welcome', timestamp: new Date().toLocaleTimeString() }
@@ -69,6 +130,7 @@ export class GdmLiveAudio extends LitElement {
 
   connectedCallback() {
     super.connectedCallback();
+    this.loadPermissions();
     this.loadVoiceInteractions();
     this.loadUserLocation();
     this.runBootSequence();
@@ -143,7 +205,16 @@ export class GdmLiveAudio extends LitElement {
           inputAudioTranscription: {},
           outputAudioTranscription: {},
           systemInstruction: {
-            parts: [{ text: `You are Aegis, a highly advanced, real-time voice-and-text chatbot. Respond conversationally, concisely, and clearly. Keep responses naturally paced, engaging, and friendly.${this.userLocation ? ` The user's current real-time GPS location is Latitude: ${this.userLocation.latitude}, Longitude: ${this.userLocation.longitude} (accuracy ~${this.userLocation.accuracy}m). Feel free to refer to this if they ask about weather, location, recommendations, or coordinates.` : ''}` }]
+            parts: [{ text: `You are Aegis, a highly advanced, real-time voice-and-text chatbot. Respond conversationally, concisely, and clearly. Keep responses naturally paced, engaging, and friendly.${this.userLocation ? ` The user's current real-time GPS location is Latitude: ${this.userLocation.latitude}, Longitude: ${this.userLocation.longitude} (accuracy ~${this.userLocation.accuracy}m). Feel free to refer to this if they ask about weather, location, recommendations, or coordinates.` : ''}
+
+CURRENT USER SECURITY PERMISSIONS CONFIGURATION:
+${this.permissions.map(p => `- ${p.name} (id: ${p.id}): ${p.status.toUpperCase()}`).join('\n')}
+
+INSTRUCTIONS ON SECURITY BOUNDARIES:
+1. If the user asks you to inspect or control a device, or access calendar schedules/events:
+   - Check if the corresponding permission is APPROVED.
+   - If it is APPROVED, respond enthusiastically and conversationally confirm you have carried out their command (e.g. "Adjusting your smart thermostat to 72°F", "Personal calendar synced - you have 2 meetings tomorrow").
+   - If it is REVOKED, you MUST decline the request. Explicitly inform the user that access to that hardware or account is currently restricted/revoked, and ask them to enable it in the "Security & Permissions Hub" dashboard in the top-right toolbar if they want you to control it.` }]
           }
         },
         callbacks: {
@@ -716,6 +787,103 @@ export class GdmLiveAudio extends LitElement {
     this.playSoundEffect('click');
   }
 
+  private loadPermissions() {
+    try {
+      const stored = localStorage.getItem('aegis_permissions');
+      if (stored) {
+        this.permissions = JSON.parse(stored);
+        this.addDiagnosticLog('Loaded security permissions configuration from local storage.', null, 'success');
+      }
+    } catch (e) {
+      console.error('Failed to load permissions from localStorage:', e);
+    }
+  }
+
+  private savePermissions() {
+    try {
+      localStorage.setItem('aegis_permissions', JSON.stringify(this.permissions));
+    } catch (e) {
+      console.error('Failed to save permissions to localStorage:', e);
+    }
+  }
+
+  private togglePermission(id: string) {
+    let updatedPerm: AegisPermission | null = null;
+    this.permissions = this.permissions.map(p => {
+      if (p.id === id) {
+        const newStatus = p.status === 'approved' ? 'revoked' : 'approved';
+        updatedPerm = {
+          ...p,
+          status: newStatus,
+          lastAccessed: new Date().toLocaleTimeString()
+        };
+        return updatedPerm;
+      }
+      return p;
+    });
+
+    this.savePermissions();
+
+    if (updatedPerm) {
+      const pName = (updatedPerm as AegisPermission).name;
+      const pStatus = (updatedPerm as AegisPermission).status;
+      this.addDiagnosticLog(`[SECURE SHIELD] ${pName} access ${pStatus.toUpperCase()}.`, null, pStatus === 'approved' ? 'success' : 'warning');
+      this.playSoundEffect(pStatus === 'approved' ? 'success' : 'warning');
+
+      if (this.session) {
+        try {
+          this.session.sendClientContent({
+            turns: [{
+              role: 'user',
+              parts: [{
+                text: `[SYSTEM: Security status updated. Access to ${pName} (id: ${id}) has been ${pStatus.toUpperCase()} by the user. Ensure your interactive capabilities respect this boundary immediately.]`
+              }]
+            }],
+            turnComplete: true
+          });
+          this.addDiagnosticLog(`Synchronized updated boundary for ${pName} to active Aegis live session.`, null, 'info');
+        } catch (err: any) {
+          console.error('Failed to push permission change to live session:', err);
+        }
+      }
+    }
+    this.requestUpdate();
+  }
+
+  private setAllPermissions(status: 'approved' | 'revoked') {
+    this.permissions = this.permissions.map(p => ({
+      ...p,
+      status: status,
+      lastAccessed: new Date().toLocaleTimeString()
+    }));
+    this.savePermissions();
+
+    this.addDiagnosticLog(`[SECURE SHIELD] Globally set ALL hardware and calendar accesses to ${status.toUpperCase()}.`, null, status === 'approved' ? 'success' : 'warning');
+    this.playSoundEffect(status === 'approved' ? 'success' : 'warning');
+
+    if (this.session) {
+      try {
+        this.session.sendClientContent({
+          turns: [{
+            role: 'user',
+            parts: [{
+              text: `[SYSTEM: Globally ${status === 'approved' ? 'APPROVED' : 'REVOKED'} all permissions for home hardware and calendar accounts. Adjust your behavior immediately and decline restricted actions.]`
+            }]
+          }],
+          turnComplete: true
+        });
+      } catch (err: any) {
+        console.error('Failed to sync global permission reset to live session:', err);
+      }
+    }
+    this.requestUpdate();
+  }
+
+  private togglePermissionsPanel() {
+    this.isPermissionsOpen = !this.isPermissionsOpen;
+    this.playSoundEffect('click');
+  }
+
   private loadUserLocation() {
     try {
       const stored = localStorage.getItem('aegis_user_location');
@@ -994,6 +1162,16 @@ export class GdmLiveAudio extends LitElement {
             </div>
 
             <button 
+              @click=${this.togglePermissionsPanel}
+              class="px-3 py-1.5 rounded border ${this.isPermissionsOpen ? 'border-emerald-500 bg-emerald-950/25 text-emerald-400 font-bold' : 'border-blue-500/20 hover:border-emerald-500/50 bg-blue-950/10 hover:bg-emerald-950/10 text-blue-400 hover:text-emerald-400'} text-[10px] tracking-widest uppercase transition-all duration-300 cursor-pointer pointer-events-auto flex items-center gap-1.5"
+              title="Manage hardware and calendar access permissions">
+              <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor" class="w-3.5 h-3.5 ${this.isPermissionsOpen ? 'animate-pulse' : ''}">
+                <path stroke-linecap="round" stroke-linejoin="round" d="M9 12.75 11.25 15 15 9.75m-3-7.036A11.959 11.959 0 0 1 3.598 6 11.99 11.99 0 0 0 3 9.749c0 5.592 3.824 10.29 9 11.623 5.176-1.332 9-6.03 9-11.622 0-1.31-.21-2.571-.598-3.751h-.152c-3.196 0-6.1-1.248-8.25-3.285Z" />
+              </svg>
+              Permissions Hub (${this.permissions.filter(p => p.status === 'approved').length}/${this.permissions.length})
+            </button>
+
+            <button 
               @click=${this.toggleHistoryPanel}
               class="px-3 py-1.5 rounded border border-blue-500/20 hover:border-blue-500 bg-blue-950/10 hover:bg-blue-950/30 text-blue-400 text-[10px] tracking-widest uppercase transition-all duration-300 cursor-pointer pointer-events-auto flex items-center gap-1.5">
               <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor" class="w-3.5 h-3.5">
@@ -1151,6 +1329,189 @@ export class GdmLiveAudio extends LitElement {
             @click=${this.toggleHistoryPanel}>
           </div>
         ` : ''}
+
+        <!-- Permissions Panel Backdrop Overlay -->
+        ${this.isPermissionsOpen ? html`
+          <div 
+            class="fixed inset-0 bg-black/60 backdrop-blur-sm z-40 transition-opacity duration-300 pointer-events-auto"
+            @click=${this.togglePermissionsPanel}>
+          </div>
+        ` : ''}
+
+        <!-- Permissions Panel Sidebar -->
+        <div class="fixed top-0 bottom-0 right-0 w-full max-w-md bg-zinc-950/95 border-l border-white/10 z-50 transition-transform duration-300 ease-in-out transform ${this.isPermissionsOpen ? 'translate-x-0' : 'translate-x-full'} flex flex-col pointer-events-auto shadow-[0_0_50px_rgba(0,0,0,0.8)]">
+          
+          <!-- Header -->
+          <div class="p-6 border-b border-white/5 flex items-center justify-between bg-zinc-900/50">
+            <div class="flex items-center gap-2">
+              <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor" class="w-5 h-5 text-emerald-400">
+                <path stroke-linecap="round" stroke-linejoin="round" d="M9 12.75 11.25 15 15 9.75m-3-7.036A11.959 11.959 0 0 1 3.598 6 11.99 11.99 0 0 0 3 9.749c0 5.592 3.824 10.29 9 11.623 5.176-1.332 9-6.03 9-11.622 0-1.31-.21-2.571-.598-3.751h-.152c-3.196 0-6.1-1.248-8.25-3.285Z" />
+              </svg>
+              <div>
+                <h2 class="text-sm font-bold tracking-wider text-white font-mono uppercase">Permissions Hub</h2>
+                <p class="text-[9px] text-zinc-500 font-mono font-bold uppercase tracking-widest">Interface Gateways</p>
+              </div>
+            </div>
+
+            <button 
+              @click=${this.togglePermissionsPanel}
+              class="text-zinc-400 hover:text-white transition-colors cursor-pointer"
+              title="Close Panel">
+              <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor" class="w-6 h-6">
+                <path stroke-linecap="round" stroke-linejoin="round" d="M6 18 18 6M6 6l12 12" />
+              </svg>
+            </button>
+          </div>
+
+          <!-- Body Container -->
+          <div class="flex-1 overflow-y-auto p-6 space-y-5 custom-scrollbar">
+            
+            <!-- Health & Quick Actions Card -->
+            <div class="p-4 rounded-xl border border-white/5 bg-zinc-900/20 space-y-4">
+              <div class="flex items-center justify-between">
+                <div>
+                  <div class="text-[10px] font-mono text-zinc-400 uppercase tracking-wider">Interface Integrity</div>
+                  <div class="text-xs font-mono font-bold text-white mt-0.5 flex items-center gap-1.5">
+                    <span class="w-2 h-2 rounded-full ${this.permissions.filter(p => p.status === 'approved').length > 0 ? 'bg-emerald-500 animate-pulse' : 'bg-red-500'}"></span>
+                    ${this.permissions.filter(p => p.status === 'approved').length} of ${this.permissions.length} Gateways Online
+                  </div>
+                </div>
+                <!-- Dynamic progress bar -->
+                <div class="w-24 bg-zinc-800 rounded-full h-1.5 overflow-hidden">
+                  <div class="bg-emerald-500 h-1.5 rounded-full transition-all duration-500" style="width: ${(this.permissions.filter(p => p.status === 'approved').length / this.permissions.length) * 100}%"></div>
+                </div>
+              </div>
+
+              <!-- Quick Actions Grid -->
+              <div class="grid grid-cols-2 gap-2 pt-2 border-t border-white/5">
+                <button 
+                  @click=${() => this.setAllPermissions('approved')}
+                  class="py-1.5 rounded bg-emerald-950/20 hover:bg-emerald-950/40 border border-emerald-500/20 hover:border-emerald-500/40 text-emerald-400 text-[10px] font-mono uppercase tracking-wider transition-all cursor-pointer">
+                  Authorize All
+                </button>
+                <button 
+                  @click=${() => this.setAllPermissions('revoked')}
+                  class="py-1.5 rounded bg-red-950/10 hover:bg-red-950/30 border border-red-500/20 hover:border-red-500/40 text-red-400 text-[10px] font-mono uppercase tracking-wider transition-all cursor-pointer">
+                  Block All
+                </button>
+              </div>
+            </div>
+
+            <!-- Tabs Selector -->
+            <div class="flex items-center p-1 rounded-lg bg-zinc-900/60 border border-white/5 font-mono text-[10px]">
+              <button 
+                @click=${() => this.activePermissionCategory = 'all'}
+                class="flex-1 py-1.5 text-center rounded transition-all cursor-pointer ${this.activePermissionCategory === 'all' ? 'bg-blue-500 text-black font-bold font-mono' : 'text-zinc-400 hover:text-white'}"
+                style="outline: none;">
+                ALL
+              </button>
+              <button 
+                @click=${() => this.activePermissionCategory = 'hardware'}
+                class="flex-1 py-1.5 text-center rounded transition-all cursor-pointer ${this.activePermissionCategory === 'hardware' ? 'bg-blue-500 text-black font-bold font-mono' : 'text-zinc-400 hover:text-white'}"
+                style="outline: none;">
+                HARDWARE
+              </button>
+              <button 
+                @click=${() => this.activePermissionCategory = 'calendar'}
+                class="flex-1 py-1.5 text-center rounded transition-all cursor-pointer ${this.activePermissionCategory === 'calendar' ? 'bg-blue-500 text-black font-bold font-mono' : 'text-zinc-400 hover:text-white'}"
+                style="outline: none;">
+                CALENDARS
+              </button>
+            </div>
+
+            <!-- Permissions Gate List -->
+            <div class="space-y-3.5">
+              ${this.permissions
+                .filter(p => this.activePermissionCategory === 'all' || p.category === this.activePermissionCategory)
+                .map(p => html`
+                  <div class="p-4 rounded-xl border transition-all duration-300 ${
+                    p.status === 'approved' 
+                      ? 'border-emerald-500/15 bg-emerald-950/5 shadow-[inset_0_1px_0_rgba(16,185,129,0.05)]' 
+                      : 'border-white/5 bg-zinc-900/10'
+                  }">
+                    <div class="flex items-start justify-between gap-4">
+                      
+                      <!-- Icon + Title + Info -->
+                      <div class="flex items-start gap-3">
+                        <div class="p-2 rounded-lg border shrink-0 mt-0.5 ${
+                          p.status === 'approved' 
+                            ? 'border-emerald-500/25 bg-emerald-950/20 text-emerald-400' 
+                            : 'border-white/5 bg-zinc-900/40 text-zinc-500'
+                        }">
+                          ${p.id === 'smart_lights' ? html`
+                            <svg class="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
+                              <path stroke-linecap="round" stroke-linejoin="round" d="M12 3v1m0 16v1m9-9h-1M4 12H3m15.364-6.364l-.707.707M6.343 17.657l-.707.707m0-12.728l.707.707m12.728 12.728l.707-.707M12 7a5 5 0 100 10 5 5 0 000-10z" />
+                            </svg>
+                          ` : p.id === 'thermostat' ? html`
+                            <svg class="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
+                              <path stroke-linecap="round" stroke-linejoin="round" d="M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 01-2 2h-2a2 2 0 01-2-2z" />
+                            </svg>
+                          ` : p.id === 'smart_lock' ? html`
+                            <svg class="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
+                              <path stroke-linecap="round" stroke-linejoin="round" d="M12 15v2m-6 4h12a2 2 0 002-2v-6a2 2 0 00-2-2H6a2 2 0 00-2 2v6a2 2 0 002 2zm10-10V7a4 4 0 00-8 0v4h8z" />
+                            </svg>
+                          ` : p.id === 'security_camera' ? html`
+                            <svg class="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
+                              <path stroke-linecap="round" stroke-linejoin="round" d="M15 10l4.553-2.276A1 1 0 0121 8.618v6.764a1 1 0 01-1.447.894L15 14M5 18h8a2 2 0 002-2V8a2 2 0 00-2-2H5a2 2 0 00-2 2v8a2 2 0 002 2z" />
+                            </svg>
+                          ` : html`
+                            <svg class="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
+                              <path stroke-linecap="round" stroke-linejoin="round" d="M8 7V3m8 4V3m-9 8h10M5 21h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z" />
+                            </svg>
+                          `}
+                        </div>
+                        
+                        <div class="space-y-0.5">
+                          <h4 class="text-xs font-mono font-bold text-white flex flex-wrap items-center gap-2">
+                            ${p.name}
+                            <span class="text-[8px] px-1.5 py-0.2 rounded font-mono border ${
+                              p.category === 'hardware' 
+                                ? 'border-amber-500/25 bg-amber-950/10 text-amber-400' 
+                                : 'border-blue-500/25 bg-blue-950/10 text-blue-400'
+                            }">
+                              ${p.category.toUpperCase()}
+                            </span>
+                          </h4>
+                          <p class="text-[10px] text-zinc-400 leading-relaxed font-sans">${p.description}</p>
+                        </div>
+                      </div>
+
+                      <!-- Flip Switch Toggle Control -->
+                      <button 
+                        @click=${() => this.togglePermission(p.id)}
+                        class="relative inline-flex h-5 w-10 shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors duration-200 ease-in-out focus:outline-none ${
+                          p.status === 'approved' ? 'bg-emerald-500' : 'bg-zinc-800'
+                        }"
+                        style="outline: none;">
+                        <span class="pointer-events-none inline-block h-4 w-4 transform rounded-full bg-white shadow ring-0 transition duration-200 ease-in-out ${
+                          p.status === 'approved' ? 'translate-x-5' : 'translate-x-0'
+                        }"></span>
+                      </button>
+
+                    </div>
+
+                    <!-- Telemetry audit footer inside card -->
+                    <div class="mt-3 pt-2.5 border-t border-white/5 flex items-center justify-between text-[8.5px] font-mono text-zinc-500">
+                      <div class="flex items-center gap-1">
+                        <span class="w-1 h-1 rounded-full ${p.status === 'approved' ? 'bg-emerald-500 animate-ping' : 'bg-zinc-600'}"></span>
+                        Gate State: <span class="${p.status === 'approved' ? 'text-emerald-400 font-bold' : 'text-zinc-500'}">${p.status.toUpperCase()}</span>
+                      </div>
+                      <div>
+                        Last Action: <span class="text-zinc-400 font-mono">${p.lastAccessed}</span>
+                      </div>
+                    </div>
+
+                  </div>
+                `)}
+            </div>
+
+          </div>
+
+          <!-- Panel Footer -->
+          <div class="p-4 border-t border-white/5 bg-zinc-900/20 text-center text-[9px] font-mono text-zinc-600">
+            Aegis Cryptographic Shield Gateway v3.1
+          </div>
+        </div>
 
         <!-- Side Panel Container -->
         <div class="fixed top-0 bottom-0 right-0 w-full max-w-md bg-zinc-950/95 border-l border-white/10 z-50 transition-transform duration-300 ease-in-out transform ${this.isHistoryOpen ? 'translate-x-0' : 'translate-x-full'} flex flex-col pointer-events-auto shadow-[0_0_50px_rgba(0,0,0,0.8)]">
