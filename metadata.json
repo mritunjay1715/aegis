@@ -1,0 +1,11 @@
+{
+  "name": "Aegis AI Chatbot",
+  "description": "A highly advanced, real-time voice-and-text chatbot powered by the Gemini Live API with high-fidelity speech synthesis and futuristic 3D audio-reactive visualization.",
+  "requestFramePermissions": [
+    "microphone"
+  ],
+  "prompt": "",
+  "majorCapabilities": [
+    "MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"
+  ]
+}
